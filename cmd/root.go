@@ -31,10 +31,10 @@ var cfgFile string
 var rootCmd = &cobra.Command{
 	Use:   "proxy-pool",
 	Short: "A brief description of your application",
-		Run: func(cmd *cobra.Command, args []string) {
-			server := proxy.NewProxy()
-			log.Fatal(server.Start())
-		},
+	Run: func(cmd *cobra.Command, args []string) {
+		server := proxy.NewProxy()
+		log.Fatal(server.Start())
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -67,7 +67,7 @@ func initConfig() {
 		viper.SetConfigFile(cfgFile)
 	} else {
 		viper.AddConfigPath("./")
-		viper.SetConfigFile("config.yaml")
+		viper.SetConfigFile(".env")
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match

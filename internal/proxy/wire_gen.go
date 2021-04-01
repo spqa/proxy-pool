@@ -7,12 +7,18 @@ package proxy
 
 import (
 	"proxy-pool/internal/core"
+	"proxy-pool/pkg/pool"
 )
 
 // Injectors from injector.go:
 
 func NewProxy() *Proxy {
 	config := core.ProvideConfig()
-	proxy := newProxy(config)
+	client := core.ProvideRedis(config)
+	repository := pool.NewRepository(client)
+	checkerService := pool.NewCheckerService(client)
+	fetcherJob := pool.NewFetcherJob(checkerService)
+	service := pool.NewPoolService(repository, fetcherJob, checkerService)
+	proxy := newProxy(config, service)
 	return proxy
 }

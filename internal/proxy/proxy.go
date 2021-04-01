@@ -1,15 +1,29 @@
 package proxy
 
 import (
+	"context"
+	"h12.io/socks"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"proxy-pool/config"
+	"proxy-pool/pkg/pool"
 )
 
 type Proxy struct {
-	cfg *config.Config
+	cfg         *config.Config
+	poolService *pool.Service
+}
+
+func newProxy(
+	cfg *config.Config,
+	poolService *pool.Service,
+) *Proxy {
+	return &Proxy{
+		cfg:         cfg,
+		poolService: poolService,
+	}
 }
 
 func (p *Proxy) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -22,34 +36,41 @@ func (p *Proxy) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		panic("failed to hijack connection, error: " + err.Error())
 	}
 	host := request.Host
-	targetConnection, err := net.Dial("tcp", host)
-	socks.
+	//targetConnection, err := net.Dial("tcp", host)
+	//http.Transport{}
+	dialFunc := socks.Dial("socks4://83.238.80.30:5678?timeout=5s")
+	targetConnection, err := dialFunc("tcp", host)
 	if err != nil {
-		panic("failed to dial connection to target host: " + host)
+		panic("failed to dial connection to target host: " + host + ", error: " + err.Error())
+	}
+	// success establish connection to target host
+	_, err = sourceConnection.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
+	if err != nil {
+		panic("failed to write success header")
 	}
 
-	// success establish connection to target host
-	sourceConnection.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
-
-	go copyAndClose(sourceConnection, targetConnection)
-	go copyAndClose(targetConnection, sourceConnection)
+	sourceTcp, ok := sourceConnection.(*net.TCPConn)
+	if !ok {
+		panic("failed to cast source connection to TCP")
+	}
+	targetTcp, ok := targetConnection.(*net.TCPConn)
+	if !ok {
+		panic("failed to cast target connection to TCP")
+	}
+	go copyAndClose(sourceTcp, targetTcp)
+	go copyAndClose(targetTcp, sourceTcp)
 }
 
-func copyAndClose(source io.ReadCloser, dest io.WriteCloser) {
-	_, err := io.Copy(dest, source)
+func copyAndClose(sourceConn *net.TCPConn, destConn *net.TCPConn) {
+	_, err := io.Copy(sourceConn, destConn)
 	if err != nil {
 		log.Print("error copy to dest: " + err.Error())
 	}
-	_ = source.Close()
-	_ = dest.Close()
-}
-
-func newProxy(config *config.Config) *Proxy {
-	return &Proxy{
-		cfg: config,
-	}
+	_ = sourceConn.CloseRead()
+	_ = destConn.CloseWrite()
 }
 
 func (p *Proxy) Start() error {
+	p.poolService.Start(context.Background())
 	return http.ListenAndServe(":3000", p)
 }
