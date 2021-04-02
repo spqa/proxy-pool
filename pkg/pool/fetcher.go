@@ -1,8 +1,11 @@
 package pool
 
 import (
+	"encoding/json"
 	"github.com/gocolly/colly/v2"
 	"go.uber.org/zap"
+	"io"
+	"net/http"
 	"proxy-pool/pkg/log"
 	"strconv"
 )
@@ -25,7 +28,6 @@ func (p ProxyHubFetcher) Get() ([]*entity, error) {
 	// Find and visit all links
 	c.OnHTML("tbody", func(e *colly.HTMLElement) {
 		e.ForEach("tr", func(i int, element *colly.HTMLElement) {
-			log.Logger.Debug("process row", zap.Int("row", i))
 			entity := new(entity)
 			element.ForEach("td", func(i int, element *colly.HTMLElement) {
 				switch i {
@@ -61,4 +63,45 @@ func (p ProxyHubFetcher) Get() ([]*entity, error) {
 
 	err := c.Visit("https://www.proxyhub.me/")
 	return entities, err
+}
+
+type ProxyScanFetcher struct {
+}
+
+func (p ProxyScanFetcher) Get() ([]*entity, error) {
+	client := http.Client{}
+	resp, err := client.Get("https://www.proxyscan.io/api/proxy?ping=1000&limit=20&uptime=50&last_check=3600&country=vn,th,sg")
+	if err != nil {
+		return nil, err
+	}
+	bytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var parsed []map[string]interface{}
+	err = json.Unmarshal(bytes, &parsed)
+	if err != nil {
+		return nil, err
+	}
+	var result []*entity
+	for _, v := range parsed {
+		t, err := parseType((v["Type"].([]interface{}))[0].(string))
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, &entity{
+			Ip:       v["Ip"].(string),
+			Port:     int(v["Port"].(float64)),
+			Type:     t,
+			Country:  "",
+			Latency:  0,
+			Username: "",
+			Password: "",
+		})
+	}
+	return result, nil
+}
+
+func (p ProxyScanFetcher) Name() string {
+	return "https://proxyscan.io"
 }

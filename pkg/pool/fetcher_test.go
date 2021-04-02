@@ -14,3 +14,16 @@ func TestProxyHubFetcher_Get(t *testing.T) {
 		}
 	}
 }
+
+func TestProxyScanFetcher_Get(t *testing.T) {
+	fetcher := new(ProxyScanFetcher)
+	get, err := fetcher.Get()
+	if err != nil {
+		t.Error(err)
+	} else {
+		t.Logf("entities %v", get)
+		if len(get) == 0 {
+			t.Fail()
+		}
+	}
+}

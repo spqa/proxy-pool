@@ -2,14 +2,18 @@ package proxy
 
 import (
 	"context"
-	"h12.io/socks"
+	"errors"
+	"go.uber.org/zap"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"proxy-pool/config"
+	"proxy-pool/pkg/log"
 	"proxy-pool/pkg/pool"
+	"time"
 )
+
+const maxTryCount = 5
 
 type Proxy struct {
 	cfg         *config.Config
@@ -26,7 +30,22 @@ func newProxy(
 	}
 }
 
+type halfClosable interface {
+	net.Conn
+	CloseWrite() error
+	CloseRead() error
+}
+
 func (p *Proxy) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	defer func() {
+		err := recover()
+		if err != nil {
+			log.Logger.Error("panic", zap.Any("error", err))
+			writer.WriteHeader(500)
+			_, _ = writer.Write([]byte("internal server error"))
+		}
+	}()
+	log.Logger.Debug("request", zap.String("host", request.Host))
 	hij, ok := writer.(http.Hijacker)
 	if !ok {
 		panic("hijacking the connection is not supported")
@@ -36,10 +55,9 @@ func (p *Proxy) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		panic("failed to hijack connection, error: " + err.Error())
 	}
 	host := request.Host
-	//targetConnection, err := net.Dial("tcp", host)
-	//http.Transport{}
-	dialFunc := socks.Dial("socks4://83.238.80.30:5678?timeout=5s")
-	targetConnection, err := dialFunc("tcp", host)
+	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancelFunc()
+	targetConnection, err := p.tryDialConnectionToHost(ctx, host)
 	if err != nil {
 		panic("failed to dial connection to target host: " + host + ", error: " + err.Error())
 	}
@@ -49,28 +67,65 @@ func (p *Proxy) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		panic("failed to write success header")
 	}
 
-	sourceTcp, ok := sourceConnection.(*net.TCPConn)
+	sourceClosableConn, ok := sourceConnection.(halfClosable)
 	if !ok {
-		panic("failed to cast source connection to TCP")
+		panic("failed to cast source connection to closable connection")
 	}
-	targetTcp, ok := targetConnection.(*net.TCPConn)
+	targetClosableConn, ok := targetConnection.(halfClosable)
 	if !ok {
-		panic("failed to cast target connection to TCP")
+		panic("failed to cast target connection to closable connection")
 	}
-	go copyAndClose(sourceTcp, targetTcp)
-	go copyAndClose(targetTcp, sourceTcp)
+	go copyAndClose(sourceClosableConn, targetClosableConn)
+	go copyAndClose(targetClosableConn, sourceClosableConn)
 }
 
-func copyAndClose(sourceConn *net.TCPConn, destConn *net.TCPConn) {
+func (p Proxy) tryDialConnectionToHost(ctx context.Context, host string) (net.Conn, error) {
+	entities, err := p.poolService.GetByRandom(ctx, maxTryCount)
+	if err != nil {
+		return nil, err
+	}
+	tryCount := 1
+	var targetConnection net.Conn
+	for tryCount <= min(maxTryCount, len(entities)) {
+		entity := entities[tryCount-1]
+		dialFunc := entity.GetDialFunc()
+		log.Logger.Debug("trying proxy", zap.String("proxy", entity.GetProxyUri()), zap.Int("tryCount", tryCount))
+		targetConnection, err = dialFunc("tcp", host)
+		if err != nil {
+			log.Logger.Debug("trying proxy error", zap.Error(err))
+			err := p.poolService.Delete(ctx, entity)
+			if err != nil {
+				log.Logger.Warn("remove from pool error", zap.Error(err))
+			}
+			tryCount++
+			continue
+		}
+		break
+	}
+	if tryCount > min(maxTryCount, len(entities)) {
+		return nil, errors.New("maximum retry reached")
+	}
+	return targetConnection, nil
+}
+
+func min(x, y int) int {
+	if x > y {
+		return y
+	}
+	return x
+}
+
+func copyAndClose(sourceConn halfClosable, destConn halfClosable) {
 	_, err := io.Copy(sourceConn, destConn)
 	if err != nil {
-		log.Print("error copy to dest: " + err.Error())
+		log.Logger.Error("error copy to dest: " + err.Error())
 	}
 	_ = sourceConn.CloseRead()
 	_ = destConn.CloseWrite()
 }
 
 func (p *Proxy) Start() error {
-	p.poolService.Start(context.Background())
-	return http.ListenAndServe(":3000", p)
+	go p.poolService.Start(context.Background())
+	log.Logger.Info("starting proxy server")
+	return http.ListenAndServe(":3001", p)
 }

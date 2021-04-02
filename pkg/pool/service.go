@@ -1,6 +1,10 @@
 package pool
 
-import "context"
+import (
+	"context"
+	"go.uber.org/zap"
+	"proxy-pool/pkg/log"
+)
 
 type Service struct {
 	repository     *repository
@@ -21,11 +25,12 @@ func (s Service) SaveMany(ctx context.Context, entities []*entity) error {
 }
 
 func (s Service) Delete(ctx context.Context, entity *entity) error {
+	log.Logger.Info("removing proxy from pool", zap.String("proxy", entity.GetProxyUri()))
 	return s.repository.delete(ctx, entity)
 }
 
-func (s Service) GetByRandom(ctx context.Context) (*entity, error) {
-	return s.repository.getByRandom(ctx)
+func (s Service) GetByRandom(ctx context.Context, count int64) ([]*entity, error) {
+	return s.repository.getByRandom(ctx, count)
 }
 
 func (s Service) Start(ctx context.Context) {

@@ -9,6 +9,7 @@ import (
 	"h12.io/socks"
 	"net"
 	"net/http"
+	"net/url"
 	"proxy-pool/pkg/log"
 	"time"
 )
@@ -25,13 +26,19 @@ func NewCheckerService(redis *redis.Client) *CheckerService {
 }
 
 func (c *CheckerService) Check(entity *entity) bool {
-	log.Logger.Info("start checking", zap.String("proxy", entity.getProxyUri()))
+	//log.Logger.Info("start checking", zap.String("proxy", entity.GetProxyUri()))
 	var tr *http.Transport
 	if entity.Type == Socks4 || entity.Type == Socks5 {
-		dial := socks.Dial(entity.getProxyUri())
+		dial := socks.Dial(entity.GetProxyUri())
 		tr = &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return dial(network, addr)
 		}}
+	} else {
+		tr = &http.Transport{
+			Proxy: func(*http.Request) (*url.URL, error) {
+				return url.Parse(entity.GetProxyUri())
+			},
+		}
 	}
 	client := &http.Client{
 		Timeout:   time.Second * 10,
@@ -39,10 +46,9 @@ func (c *CheckerService) Check(entity *entity) bool {
 	}
 	resp, err := client.Get("https://m.tiktok.com")
 	if err != nil {
-		log.Logger.Warn("check failed",
-			zap.String("error", err.Error()),
-			zap.String("proxy", entity.getProxyUri()),
-		)
+		//log.Logger.Info("check failed",
+		//	zap.String("proxy", entity.GetProxyUri()),
+		//)
 		return false
 	}
 	return resp.StatusCode == http.StatusOK
@@ -73,7 +79,9 @@ func (c CheckerService) ProcessQueue(ctx context.Context, successFunc checkSucce
 				go func() {
 					if c.Check(e) {
 						err := successFunc(e)
-						log.Logger.Error("failed to process success func", zap.Error(err))
+						if err != nil {
+							log.Logger.Error("failed to process success func", zap.Error(err))
+						}
 					}
 					// release slot
 					<-slotChannel

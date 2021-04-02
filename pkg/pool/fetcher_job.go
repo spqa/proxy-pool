@@ -56,7 +56,8 @@ func (f *FetcherJob) Start() {
 
 func (f *FetcherJob) Setup() {
 	log.Logger.Info("setting up fetcher cron job")
-	f.RegisterFetcher(&ProxyHubFetcher{})
+	//f.RegisterFetcher(&ProxyHubFetcher{})
+	f.RegisterFetcher(&ProxyScanFetcher{})
 	log.Logger.Info("fetcher count", zap.Int("count", len(f.fetchers)))
 	c := cron.New(cron.WithParser(cron.NewParser(
 		cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
